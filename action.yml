@@ -1,0 +1,61 @@
+name: odoo-lint
+description: Lint Odoo addons with odoo-lint (odl), pylint-odoo and OCA checks, as annotations or in code scanning
+author: bosd
+branding:
+  icon: check-circle
+  color: purple
+
+inputs:
+  version:
+    description: odoo-linter version from PyPI, e.g. 0.1.0a4. Empty for the latest release.
+    required: false
+    default: ""
+  paths:
+    description: Files or directories to lint, separated by spaces.
+    required: false
+    default: "."
+  args:
+    description: More arguments for `odl check`, e.g. `--select PO` or `--odoo-version 18.0`.
+    required: false
+    default: ""
+  sarif:
+    description: Send the findings to GitHub code scanning instead of annotations. The job needs `security-events write`.
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+      with:
+        enable-cache: false
+    - name: Lint
+      id: lint
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+        PATHS: ${{ inputs.paths }}
+        ARGS: ${{ inputs.args }}
+        SARIF: ${{ inputs.sarif }}
+      run: |
+        package=odoo-linter
+        if [ -n "$VERSION" ]; then package="odoo-linter==$VERSION"; fi
+        # Paths and arguments are separated by spaces, so split them.
+        # shellcheck disable=SC2086
+        if [ "$SARIF" = true ]; then
+          uvx --from "$package" odl check --output-format sarif $ARGS $PATHS > "$RUNNER_TEMP/odoo-lint.sarif" && status=0 || status=$?
+        else
+          uvx --from "$package" odl check --output-format github $ARGS $PATHS && status=0 || status=$?
+        fi
+        echo "status=$status" >> "$GITHUB_OUTPUT"
+    - name: Upload to code scanning
+      if: inputs.sarif == 'true'
+      uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
+      with:
+        sarif_file: ${{ runner.temp }}/odoo-lint.sarif
+        category: odoo-lint
+    - name: Fail on findings
+      shell: bash
+      env:
+        STATUS: ${{ steps.lint.outputs.status }}
+      run: exit "$STATUS"
